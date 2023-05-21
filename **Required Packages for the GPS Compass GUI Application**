@@ -1,7 +1,3 @@
-Certainly, here's a nicely formatted list for you:
-
----
-
 **Required Packages for the GPS Compass GUI Application**
 
 1. **tkinter**: Tkinter is the standard Python interface to the Tk GUI toolkit. It is a built-in package with Python 3.x installations. If for some reason it's not installed, you can add it via the package manager specific to your Python environment. For a full installation of Python on Windows, Tkinter is included.
