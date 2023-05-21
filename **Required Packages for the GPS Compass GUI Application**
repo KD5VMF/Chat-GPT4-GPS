@@ -1,0 +1,49 @@
+Certainly, here's a nicely formatted list for you:
+
+---
+
+**Required Packages for the GPS Compass GUI Application**
+
+1. **tkinter**: Tkinter is the standard Python interface to the Tk GUI toolkit. It is a built-in package with Python 3.x installations. If for some reason it's not installed, you can add it via the package manager specific to your Python environment. For a full installation of Python on Windows, Tkinter is included.
+
+2. **matplotlib**: Matplotlib is a plotting library for Python and is used in this script for creating the compass. Install it via pip using the command:
+
+   ```
+   pip install matplotlib
+   ```
+
+3. **numpy**: Numpy is a powerful library that adds support for large, multi-dimensional arrays and matrices, along with a large collection of high-level mathematical functions to operate on these arrays. Install it via pip using the command:
+
+   ```
+   pip install numpy
+   ```
+
+4. **pyserial**: PySerial encapsulates the access for the serial port. It provides backends for Python running on Windows, OSX, Linux, BSD, and others. Install it via pip using the command:
+
+   ```
+   pip install pyserial
+   ```
+
+5. **pynmea2**: Pynmea2 is a Python library for parsing NMEA 0183, a proprietary protocol of the National Marine Electronics Association. Install it via pip using the command:
+
+   ```
+   pip install pynmea2
+   ```
+
+6. **pytz**: Pytz allows accurate and cross-platform timezone calculations. Install it via pip using the command:
+
+   ```
+   pip install pytz
+   ```
+
+7. **configparser**: Configparser is a standard Python library to write, read, and manage configuration files. It's included with standard Python 3.x installations, but if needed, you can install it via pip using the command:
+
+   ```
+   pip install configparser
+   ```
+
+Please ensure to run these commands in the Python environment where you intend to run the script. 
+
+Note: If you do not have administrative privileges and you're not using a virtual environment, you may need to add `--user` to the commands, e.g., `pip install --user matplotlib`.
+
+Remember to make sure that you have Python 3.x installed, as this code may not be compatible with Python 2.x.
