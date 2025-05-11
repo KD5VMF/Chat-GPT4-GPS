@@ -26,144 +26,192 @@ Notes:
 This script is created and maintained by OpenAI's ChatGPT. For any bugs or improvements, please report to OpenAI.
 """
 
-
 import tkinter as tk
-from tkinter import ttk
+import serial
+import serial.tools.list_ports
+import pynmea2
+import threading
+from datetime import datetime
+import numpy as np
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
-import numpy as np
-import serial
-import pynmea2
-import serial.tools.list_ports
-import pytz
-from datetime import datetime, timedelta
-import configparser
 
-class Application(tk.Frame):
-    def __init__(self, master=None, port=None, baudrate=9600):
-        super().__init__(master)
-        self.master = master
-        self.grid()
+class RetroGPSApp:
+    def __init__(self, root, port, baudrate):
+        self.root = root
+        self.root.title("Retro GPS Monitor")
+        self.root.configure(bg="black")
+        self.fullscreen = True
+        self.root.attributes('-fullscreen', True)
+        self.root.bind("<F8>", self.toggle_fullscreen)
+        self.root.bind("<q>", lambda e: self.quit())
+        self.root.bind("<Q>", lambda e: self.quit())
 
-        self.default_font = ("Helvetica", 12, "bold")
-        self.speed_font = ("Helvetica", 24, "bold")
-        self.speed_label = tk.Label(self, font=self.speed_font)
-        self.altitude_label = tk.Label(self, font=self.default_font)
-        self.latitude_label = tk.Label(self, font=self.default_font)
-        self.longitude_label = tk.Label(self, font=self.default_font)
-        self.satellites_label = tk.Label(self, font=self.default_font)
-        self.time_label = tk.Label(self, font=self.default_font)
-        self.date_label = tk.Label(self, font=self.default_font)
+        # Get screen size
+        self.screen_width = self.root.winfo_screenwidth()
+        self.screen_height = self.root.winfo_screenheight()
 
-        self.speed_label.grid(row=0, column=0)
-        self.altitude_label.grid(row=1, column=0)
-        self.latitude_label.grid(row=2, column=0)
-        self.longitude_label.grid(row=3, column=0)
-        self.satellites_label.grid(row=4, column=0)
-        self.time_label.grid(row=5, column=0)
-        self.date_label.grid(row=6, column=0)
+        # Layout frames
+        main_frame = tk.Frame(root, bg="black")
+        main_frame.pack(fill=tk.BOTH, expand=True)
 
-        self.figure = Figure(figsize=(5, 5), dpi=100)
+        left_frame = tk.Frame(main_frame, bg="black")
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        right_frame = tk.Frame(main_frame, bg="black")
+        right_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=False)
+
+        # Retro-style canvas
+        self.canvas = tk.Canvas(left_frame, bg="black", highlightthickness=0,
+                                width=self.screen_width // 2, height=self.screen_height)
+        self.canvas.pack(fill=tk.BOTH, expand=True)
+
+        # Radar-style compass
+        self.figure = Figure(figsize=(4, 4), dpi=100, facecolor='black')
         self.ax = self.figure.add_subplot(111, polar=True)
+        self.ax.set_facecolor("black")
+        self.ax.tick_params(colors='lime')
         self.ax.set_yticklabels([])
-        labels = [f"{degree}°\n{direction}" for degree, direction in zip(range(0, 360, 45), ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'])]
-        self.ax.set_xticks(np.deg2rad(np.arange(0, 360, 45)))
-        self.ax.set_xticklabels(labels)
         self.ax.set_theta_zero_location("N")
         self.ax.set_theta_direction(-1)
-        self.canvas = FigureCanvasTkAgg(self.figure, master=self.master)
-        self.canvas.get_tk_widget().grid(row=7, column=0)
-        self.compass_arrow, = self.ax.plot([0, 0], [0, 1], color='red')
+        self.ax.set_xticks(np.deg2rad(np.arange(0, 360, 45)))
+        self.ax.set_xticklabels(['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'], color='lime', fontsize=14)
+        self.arrow, = self.ax.plot([0, 0], [0, 1], color='lime', linewidth=2)
 
-        self.config = configparser.ConfigParser()
-        self.config_file = 'config.ini'
-        self.config.read(self.config_file)
-        timezone = self.config.get('DEFAULT', 'TimeZone', fallback='UTC')
+        self.canvas_compass = FigureCanvasTkAgg(self.figure, master=right_frame)
+        self.canvas_compass.get_tk_widget().pack(fill=tk.BOTH, expand=True)
 
-        self.time_zone_var = tk.StringVar()
-        self.time_zone_var.set(timezone)
+        # GPS data fields
+        self.text_items = {}
+        self.labels = [
+            "Latitude", "Longitude", "Altitude (m)", "Altitude (ft)",
+            "Speed (mph)", "Speed (knots)", "Speed (km/h)",
+            "True Course", "Fix Quality", "HDOP", "Satellites",
+            "UTC Time", "Date"
+        ]
 
-        menu_bar = tk.Menu(self.master)
-        self.master.config(menu=menu_bar)
+        for i, label in enumerate(self.labels):
+            y = 40 + i * 40
+            self.canvas.create_text(60, y, anchor='w', text=label + ":",
+                                    font=("Courier", 20, "bold"), fill="lime")
+            self.text_items[label] = self.canvas.create_text(
+                420, y, anchor='w', font=("Courier", 20), fill="lime", text="--")
 
-        file_menu = tk.Menu(menu_bar)
-        menu_bar.add_cascade(label="File", menu=file_menu)
+        # Bottom dynamic placement for speed and heading
+        self.large_speed_text = self.canvas.create_text(
+            60, self.screen_height - 100, anchor='sw',
+            font=("Courier", 40, "bold"), fill="lime", text="Speed: -- MPH"
+        )
+        self.heading_text = self.canvas.create_text(
+            60, self.screen_height - 40, anchor='sw',
+            font=("Courier", 32, "bold"), fill="lime", text="Heading: --"
+        )
 
-        time_zone_menu = tk.Menu(file_menu)
-        file_menu.add_cascade(label="Time Zone", menu=time_zone_menu)
-        for zone in pytz.all_timezones:
-            time_zone_menu.add_radiobutton(label=zone, variable=self.time_zone_var, command=self.save_time_zone)
+        # Serial read thread
+        try:
+            self.ser = serial.Serial(port, baudrate, timeout=1)
+            self.running = True
+            self.thread = threading.Thread(target=self.update_gps)
+            self.thread.daemon = True
+            self.thread.start()
+        except Exception as e:
+            self.canvas.create_text(60, 800, anchor='w', fill="red",
+                                    font=("Courier", 20),
+                                    text=f"Error: {e}")
 
+    def toggle_fullscreen(self, event=None):
+        self.fullscreen = not self.fullscreen
+        self.root.attributes('-fullscreen', self.fullscreen)
 
-        self.ser = serial.Serial(port, baudrate)
-        self.update_labels()
+    def quit(self):
+        self.running = False
+        self.root.destroy()
 
-        self.master.update()
-        self.master.resizable(False, False)
+    def get_compass_direction(self, angle):
+        directions = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW']
+        idx = int((angle + 22.5) % 360 // 45)
+        return directions[idx]
 
-    def save_time_zone(self):
-        self.config['DEFAULT'] = {'TimeZone': self.time_zone_var.get()}
-        with open(self.config_file, 'w') as cfgfile:
-            self.config.write(cfgfile)
-
-    def update_labels(self):
-        valid_data = False
-        while self.ser.in_waiting:
-            line = self.ser.readline().decode('utf-8').rstrip()
+    def update_gps(self):
+        while self.running:
             try:
+                line = self.ser.readline().decode(errors='ignore').strip()
                 msg = pynmea2.parse(line)
+
                 if isinstance(msg, pynmea2.types.talker.GGA):
-                    self.latitude_label["text"] = f"Latitude: {msg.latitude:.3f}"
-                    self.longitude_label["text"] = f"Longitude: {msg.longitude:.3f}"
-                    if msg.altitude is not None:
-                        altitude_feet = msg.altitude * 3.28084
-                        self.altitude_label["text"] = f"Altitude: {altitude_feet:.3f} ft"
-                    self.satellites_label["text"] = f"Number of satellites: {msg.num_sats}"
-                    valid_data = True
+                    self.set_text("Latitude", f"{msg.lat} {msg.lat_dir}")
+                    self.set_text("Longitude", f"{msg.lon} {msg.lon_dir}")
+                    self.set_text("Altitude (m)", f"{msg.altitude}")
+                    try:
+                        altitude_ft = float(msg.altitude) * 3.28084
+                        self.set_text("Altitude (ft)", f"{altitude_ft:.2f}")
+                    except:
+                        self.set_text("Altitude (ft)", "--")
+                    self.set_text("Fix Quality", msg.gps_qual)
+                    self.set_text("HDOP", msg.horizontal_dil)
+                    self.set_text("Satellites", msg.num_sats)
+
                 elif isinstance(msg, pynmea2.types.talker.RMC):
-                    if msg.spd_over_grnd is not None:
-                        speed_mph = msg.spd_over_grnd * 1.15078
-                        self.speed_label["text"] = f"Speed: {speed_mph:.3f} mph"
-                    if msg.timestamp is not None and msg.datestamp is not None:
-                        datetime_obj = datetime.combine(msg.datestamp, msg.timestamp)
-                        timezone = pytz.timezone(self.time_zone_var.get())
-                        datetime_obj = datetime_obj.replace(tzinfo=pytz.UTC).astimezone(timezone)
-                        self.time_label["text"] = f"Time: {datetime_obj.time()}"
-                        self.date_label["text"] = f"Date: {datetime_obj.date()}"
-                    if msg.true_course is not None:
-                        heading_radians = np.deg2rad(msg.true_course)
-                        self.compass_arrow.set_xdata([heading_radians, heading_radians])
+                    speed_mph = "--"
+                    try:
+                        speed_knots = float(msg.spd_over_grnd)
+                        speed_mph = speed_knots * 1.15078
+                        self.set_text("Speed (knots)", f"{speed_knots:.2f}")
+                        self.set_text("Speed (mph)", f"{speed_mph:.2f}")
+                        self.set_text("Speed (km/h)", f"{speed_knots * 1.852:.2f}")
+                        self.canvas.itemconfig(self.large_speed_text, text=f"Speed: {speed_mph:.1f} MPH")
+                    except:
+                        self.canvas.itemconfig(self.large_speed_text, text="Speed: -- MPH")
+
+                    if msg.true_course:
+                        angle = float(msg.true_course)
+                        self.set_text("True Course", msg.true_course)
+                        self.canvas.itemconfig(self.heading_text, text=f"Heading: {self.get_compass_direction(angle)}")
+                        rad = np.deg2rad(angle)
+                        self.arrow.set_xdata([0, rad])
+                        self.arrow.set_ydata([0, 1])
                         self.figure.canvas.draw()
-                    valid_data = True
-            except pynmea2.ParseError:
-                print(f"Parse error with line: {line}")
-        if not valid_data:
-            searching_text = "Searching for GPS..."
-            self.speed_label["text"] = searching_text
-            self.altitude_label["text"] = searching_text
-            self.latitude_label["text"] = searching_text
-            self.longitude_label["text"] = searching_text
-            self.satellites_label["text"] = searching_text
-            self.time_label["text"] = searching_text
-            self.date_label["text"] = searching_text
 
-        self.master.after(1000, self.update_labels)
+                    if msg.datestamp and msg.timestamp:
+                        dt = datetime.combine(msg.datestamp, msg.timestamp)
+                        self.set_text("UTC Time", dt.strftime("%H:%M:%S"))
+                        self.set_text("Date", dt.strftime("%Y-%m-%d"))
 
+            except Exception:
+                continue
+
+    def set_text(self, label, value):
+        self.canvas.itemconfig(self.text_items[label], text=value)
+
+def list_ports():
+    ports = serial.tools.list_ports.comports()
+    return [p for p in ports if "USB" in p.description or "Serial" in p.description]
 
 def main():
-    print("Available ports:")
-    ports = serial.tools.list_ports.comports()
-    for i, port in enumerate(ports, start=1):
-        print(f"{i}: {port.device}")
-    port_index = int(input("Select the port number: ")) - 1
-    port = ports[port_index].device
-    baudrate = int(input("Enter the baudrate: "))
-    root = tk.Tk()
-    root.geometry("500x680")
-    root.title("GPT4-GPS")
-    app = Application(master=root, port=port, baudrate=baudrate)
-    app.mainloop()
+    print("🔍 Scanning for GPS devices...\n")
+    ports = list_ports()
+    if not ports:
+        print("❌ No compatible GPS devices found.")
+        return
 
+    for i, port in enumerate(ports, 1):
+        print(f"{i}: {port.device} — {port.description}")
+
+    try:
+        port_index = int(input("\nEnter port number: ")) - 1
+        port = ports[port_index].device
+    except:
+        print("Invalid selection.")
+        return
+
+    try:
+        baudrate = int(input("Enter baudrate (default 9600): ") or "9600")
+    except:
+        baudrate = 9600
+
+    root = tk.Tk()
+    app = RetroGPSApp(root, port, baudrate)
+    root.mainloop()
 
 if __name__ == "__main__":
     main()
